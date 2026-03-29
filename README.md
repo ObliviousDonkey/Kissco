@@ -10,7 +10,6 @@
    ```env
    DISCORD_TOKEN=your_discord_bot_token
    GROQ_API_KEY=your_groq_api_key
-   OPENROUTER_API_KEY=your_openrouter_api_key
    GUILD_ID=your_testing_guild_id (optional)
    ```
 3. Run the bot:
@@ -25,7 +24,7 @@
 - `/forget-me`: Delete all your stored data and opt out.
 - Automatic message logging for opted-in users (messages are only stored if a user has opted in).
 - Stateless database layer using SQLite with `sqlite-vec` for semantic search.
-- Multi-model routing (Groq and OpenRouter) based on token counts with failover.
+- Multi-model routing (Groq Exclusively) based on token counts with independent failover.
 - Local embedding generation using `sentence-transformers` (all-MiniLM-L6-v2).
 - Exponential backoff for rate-limited (429) API calls.
 
@@ -37,4 +36,4 @@
 - `sentence-transformers` (Local embeddings)
 - `tiktoken` (Local token counting)
 - `aiohttp` (Async API calls)
-- `Groq` & `OpenRouter` (AI Inference)
+- `Groq` (AI Inference)
