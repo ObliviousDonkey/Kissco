@@ -21,11 +21,15 @@
 
 - `/opt-in`: Consent to have your messages stored and cloned.
 - `/imitate [user] [topic]`: Generate a response in the style of a user who has opted in.
+- `/debate [user1] [user2] [topic]`: Simulate a debate between two digital clones.
 - `/forget-me`: Delete all your stored data and opt out.
 - Automatic message logging for opted-in users (messages are only stored if a user has opted in).
 - Stateless database layer using SQLite with `sqlite-vec` for semantic search.
 - Multi-model routing (Groq Exclusively) based on token counts with independent failover.
 - Local embedding generation using `sentence-transformers` (all-MiniLM-L6-v2).
+- Short-term memory (last 5 messages) and Web Grounding (DuckDuckGo Search) for context.
+- Automatic Style Summarization (updated every 24h).
+- Data Sanitization (stripping links/tags, filtering short messages).
 - Exponential backoff for rate-limited (429) API calls.
 
 ## Tech Stack

@@ -1,10 +1,19 @@
 import discord
 from discord import app_commands
+from discord.ext import tasks
 import os
 import asyncio
+from typing import Optional, List
+import re
+import signal
 from dotenv import load_dotenv
-from database import init_db, opt_in_user, is_user_opted_in, add_message, get_relevant_messages, forget_user
+from database import (
+    init_db, opt_in_user, is_user_opted_in, add_message,
+    get_relevant_messages, forget_user, get_all_opted_in_users,
+    get_last_n_messages, update_style_summary, get_style_summary, vacuum_db
+)
 from router import AIRouter
+from duckduckgo_search import DDGS
 
 # Load environment variables
 load_dotenv()
@@ -32,9 +41,70 @@ class MyBot(discord.Client):
 
         # Initialize the database
         init_db()
+
+        # Start background tasks
+        self.style_summary_task.start()
+        self.maintenance_task.start()
+
         print("Bot and Database ready.")
 
+    @tasks.loop(hours=24)
+    async def style_summary_task(self):
+        print("Starting 24h style summary update...")
+        users = await asyncio.to_thread(get_all_opted_in_users)
+        for user_id in users:
+            messages = await asyncio.to_thread(get_last_n_messages, user_id, 100)
+            if len(messages) < 10:
+                continue
+
+            # Format prompt for Tier 3 model
+            examples = "\n".join(messages)
+            system_prompt = "Analyze this user's text. Write a strict 3-sentence ruleset on their tone, capitalization, and slang. Be concise."
+            prompt = f"{system_prompt}\n\nUSER MESSAGES:\n{examples}"
+
+            # We'll use a large enough prompt to hit Tier 3 if possible,
+            # but router handles it by token count.
+            summary = await self.router.route_and_call(prompt)
+            if summary and "I'm sorry" not in summary:
+                await asyncio.to_thread(update_style_summary, user_id, summary)
+        print("Style summary update complete.")
+
+    @tasks.loop(hours=168) # Weekly
+    async def maintenance_task(self):
+        print("Performing weekly database maintenance...")
+        await asyncio.to_thread(vacuum_db)
+        print("Maintenance complete.")
+
 bot = MyBot()
+
+def sanitize_message(text: str) -> Optional[str]:
+    # Prefix Ignore
+    if text.startswith(('!', '?', '.', '/')):
+        return None
+
+    # Media/Link Stripping and Discord Formatting Stripping
+    text = re.sub(r'http\S+', '', text)
+    text = re.sub(r'<(@|#|a:)\S+>', '', text)
+
+    # Strip whitespace
+    text = text.strip()
+
+    # Length Threshold
+    if len(text) < 15:
+        return None
+
+    return text
+
+async def get_web_context(topic: str) -> str:
+    try:
+        results = list(DDGS().text(topic, max_results=2))
+        if not results:
+            return ""
+        context = "\n".join([f"- {r['body']}" for r in results])
+        return f"\n[Real-Time News Context]\n{context}\n"
+    except Exception as e:
+        print(f"Web search error: {e}")
+        return ""
 
 @bot.tree.command(name="opt-in", description="Consent to have your messages stored and cloned.")
 async def opt_in(interaction: discord.Interaction):
@@ -56,22 +126,37 @@ async def imitate(interaction: discord.Interaction, user: discord.Member, topic:
 
     await interaction.response.defer()
 
-    # Retrieve relevant messages for the imitation
+    # Retrieve relevant messages for the imitation (RAG)
     relevant_messages = await asyncio.to_thread(get_relevant_messages, user.id, topic, limit=15)
 
     if not relevant_messages:
         await interaction.followup.send(f"I don't have enough data on {user.display_name} to imitate them yet.")
         return
 
-    # Format Few-Shot prompt
-    # Each message should be separated to provide context.
+    # Short-Term Memory: Fetch last 5 messages from channel
+    channel_history = [msg async for msg in interaction.channel.history(limit=5)]
+    history_text = "\n".join([f"{m.author.display_name}: {m.content}" for m in reversed(channel_history)])
+    channel_context = f"\n[Current Channel Context]\n{history_text}\n"
+
+    # Style Summary
+    style_summary = await asyncio.to_thread(get_style_summary, user.id)
+    style_header = f"STYLE RULES:\n{style_summary}\n" if style_summary else ""
+
+    # Web Grounding
+    web_context = await get_web_context(topic)
+
+    # Format prompt
     examples = "\n---\n".join(relevant_messages)
 
-    prompt = f"""You are a digital clone of {user.display_name}.
+    prompt = f"""{style_header}
+You are a digital clone of {user.display_name}.
 Below are several examples of how {user.display_name} writes.
 Please adopt their style, tone, and vocabulary to respond to the following topic: "{topic}".
 
-EXAMPLES:
+{channel_context}
+{web_context}
+
+EXAMPLES OF {user.display_name}:
 ---
 {examples}
 ---
@@ -83,6 +168,52 @@ RESPONSE (in the style of {user.display_name}):"""
 
     await interaction.followup.send(f"**Imitating {user.display_name} on {topic}:**\n\n{response}")
 
+@bot.tree.command(name="debate", description="Have two user clones debate a topic.")
+@app_commands.describe(user1="The first debater", user2="The second debater", topic="The debate topic")
+async def debate(interaction: discord.Interaction, user1: discord.Member, user2: discord.Member, topic: str):
+    # Verify both users are opted-in
+    opted1 = await asyncio.to_thread(is_user_opted_in, user1.id)
+    opted2 = await asyncio.to_thread(is_user_opted_in, user2.id)
+
+    if not opted1:
+        await interaction.response.send_message(f"{user1.display_name} has not opted in.", ephemeral=True)
+        return
+    if not opted2:
+        await interaction.response.send_message(f"{user2.display_name} has not opted in.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    # Fetch RAG data and style summaries
+    rag1 = await asyncio.to_thread(get_relevant_messages, user1.id, topic, limit=5)
+    rag2 = await asyncio.to_thread(get_relevant_messages, user2.id, topic, limit=5)
+    style1 = await asyncio.to_thread(get_style_summary, user1.id)
+    style2 = await asyncio.to_thread(get_style_summary, user2.id)
+
+    style1_h = f"STYLE RULES:\n{style1}\n" if style1 else ""
+    style2_h = f"STYLE RULES:\n{style2}\n" if style2 else ""
+
+    # Turn 1: User 1 gives a hot take (llama-3.1-8b-instant)
+    prompt1 = f"{style1_h}You are a digital clone of {user1.display_name}. Give a hot take on this topic: \"{topic}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag1)
+    # router handles Tier 1 based on length
+    res1 = await bot.router.route_and_call(prompt1)
+
+    # Turn 2: User 2 aggressively disagrees (llama-3.1-8b-instant or 70b depending on length)
+    prompt2 = f"{style2_h}You are a digital clone of {user2.display_name}. Aggressively disagree with this take: \"{res1}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag2)
+    res2 = await bot.router.route_and_call(prompt2)
+
+    # Turn 3: User 1 rebuts
+    prompt3 = f"{style1_h}You are a digital clone of {user1.display_name}. Give a final rebuttal to this disagreement: \"{res2}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag1)
+    res3 = await bot.router.route_and_call(prompt3)
+
+    # Combine into embed
+    embed = discord.Embed(title=f"Debate: {topic}", color=discord.Color.red())
+    embed.add_field(name=f"{user1.display_name}'s Hot Take", value=res1, inline=False)
+    embed.add_field(name=f"{user2.display_name}'s Disagreement", value=res2, inline=False)
+    embed.add_field(name=f"{user1.display_name}'s Rebuttal", value=res3, inline=False)
+
+    await interaction.followup.send(embed=embed)
+
 @bot.event
 async def on_message(message: discord.Message):
     # Don't process our own messages or bot messages
@@ -90,16 +221,30 @@ async def on_message(message: discord.Message):
         return
 
     # Only store messages from users who have opted in
-    # Use asyncio.to_thread for potentially blocking DB/embedding operations
     is_opted_in = await asyncio.to_thread(is_user_opted_in, message.author.id)
     if is_opted_in:
-        # We also want to skip commands (slash commands aren't messages anyway,
-        # but prefixed commands would be).
-        # Standard discord.py slash commands don't trigger on_message for the command itself.
-        await asyncio.to_thread(add_message, message.author.id, message.content)
+        # Data Sanitization
+        sanitized = sanitize_message(message.content)
+        if sanitized:
+            await asyncio.to_thread(add_message, message.author.id, sanitized)
+
+async def shutdown(loop):
+    print("Shutting down gracefully...")
+    # Add any cleanup tasks here (e.g., closing sessions)
+    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    [t.cancel() for t in tasks]
+    await asyncio.gather(*tasks, return_exceptions=True)
+    loop.stop()
 
 if __name__ == "__main__":
     if not TOKEN:
         print("DISCORD_TOKEN is not set. Please add it to your .env file.")
     else:
-        bot.run(TOKEN)
+        loop = asyncio.get_event_loop()
+        for s in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(s, lambda: asyncio.create_task(shutdown(loop)))
+
+        try:
+            bot.run(TOKEN)
+        except KeyboardInterrupt:
+            pass

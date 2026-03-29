@@ -43,6 +43,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY,
             opted_in BOOLEAN NOT NULL DEFAULT FALSE,
+            style_summary TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -78,6 +79,46 @@ def opt_in_user(user_id: int):
         ON CONFLICT(id) DO UPDATE SET opted_in = TRUE
     """, (user_id,))
     db.commit()
+    db.close()
+
+def update_style_summary(user_id: int, summary: str):
+    db = get_connection()
+    cursor = db.cursor()
+    cursor.execute("UPDATE users SET style_summary = ? WHERE id = ?", (summary, user_id))
+    db.commit()
+    db.close()
+
+def get_style_summary(user_id: int) -> Optional[str]:
+    db = get_connection()
+    cursor = db.cursor()
+    cursor.execute("SELECT style_summary FROM users WHERE id = ?", (user_id,))
+    result = cursor.fetchone()
+    db.close()
+    return result[0] if result else None
+
+def get_all_opted_in_users() -> List[int]:
+    db = get_connection()
+    cursor = db.cursor()
+    cursor.execute("SELECT id FROM users WHERE opted_in = TRUE")
+    results = [row[0] for row in cursor.fetchall()]
+    db.close()
+    return results
+
+def get_last_n_messages(user_id: int, limit: int = 100) -> List[str]:
+    db = get_connection()
+    cursor = db.cursor()
+    cursor.execute("""
+        SELECT content FROM messages
+        WHERE user_id = ?
+        ORDER BY timestamp DESC LIMIT ?
+    """, (user_id, limit))
+    results = [row[0] for row in cursor.fetchall()]
+    db.close()
+    return results
+
+def vacuum_db():
+    db = get_connection()
+    db.execute("VACUUM")
     db.close()
 
 def is_user_opted_in(user_id: int) -> bool:
