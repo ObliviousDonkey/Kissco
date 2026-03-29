@@ -2,22 +2,20 @@ import aiohttp
 import asyncio
 import tiktoken
 import os
-import time
-from typing import List, Dict, Any, Optional
+from typing import Optional
 
 class AIRouter:
     def __init__(self):
         self.groq_api_key = os.getenv("GROQ_API_KEY")
-        # For tiktoken, we'll use cl100k_base or o200k_base as a proxy for llama models
         try:
             self.encoding = tiktoken.get_encoding("cl100k_base")
-        except:
+        except Exception:
             self.encoding = tiktoken.get_encoding("o200k_base")
 
     def count_tokens(self, text: str) -> int:
         return len(self.encoding.encode(text))
 
-    async def _call_groq(self, session: aiohttp.ClientSession, model: str, prompt: str, retry_on_429: bool = True) -> Optional[str]:
+    async def _call_groq(self, session: aiohttp.ClientSession, model: str, prompt: str) -> Optional[str]:
         if not self.groq_api_key:
             return None
 
@@ -39,17 +37,9 @@ class AIRouter:
                     return result["choices"][0]["message"]["content"]
                 elif response.status == 429:
                     print(f"Groq Rate Limit (429) for model {model}.")
-                    if retry_on_429:
-                        # Exponential backoff for first retry
-                        wait_time = 2
-                        print(f"Retrying in {wait_time}s...")
-                        await asyncio.sleep(wait_time)
-                        # Recursive call once with retry_on_429=False
-                        return await self._call_groq(session, model, prompt, retry_on_429=False)
-                    else:
-                        return None
+                    return "RATE_LIMIT"
                 else:
-                    print(f"Groq Error ({response.status}) for model {model}: {await response.text()}")
+                    print(f"Groq Error ({response.status}) for model {model}")
                     return None
         except Exception as e:
             print(f"Groq Exception for model {model}: {e}")
@@ -74,15 +64,18 @@ class AIRouter:
             print(f"Routing to Groq primary model: {model}")
             response = await self._call_groq(session, model, prompt)
 
-            # Failover loop: if primary model fails (including 429), attempt secondary backup
-            if response is None:
+            # Failover logic: if primary model returns 429, wait 1s and retry with backup
+            if response == "RATE_LIMIT":
+                print("Primary model rate limited. Waiting 1 second for failover...")
+                await asyncio.sleep(1)
                 backup_model = "openai/gpt-oss-120b"
-                print(f"Primary model failed. Attempting failover to Groq secondary backup: {backup_model}")
+                print(f"Attempting failover to Groq secondary backup: {backup_model}")
                 response = await self._call_groq(session, backup_model, prompt)
+                if response == "RATE_LIMIT":
+                    response = None
 
             return response or "I'm sorry, I'm having trouble connecting to my brain right now."
 
 if __name__ == "__main__":
-    # Mock test
     router = AIRouter()
     print(f"Token count for 'Hello world': {router.count_tokens('Hello world')}")
