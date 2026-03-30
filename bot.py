@@ -13,7 +13,7 @@ from database import (
     get_last_n_messages, update_style_summary, get_style_summary, vacuum_db
 )
 from router import AIRouter
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 # Load environment variables
 load_dotenv()
@@ -108,7 +108,9 @@ def sanitize_message(text: str) -> Optional[str]:
 
 async def get_web_context(topic: str) -> str:
     try:
+        # The new ddgs library uses a generator or results based on arguments
         results = list(DDGS().text(topic, max_results=2))
+        print(f"WEB RESULTS: {results}") # Temporary debug verification
         if not results:
             return ""
         context = "\n".join([f"- {r['body']}" for r in results])
