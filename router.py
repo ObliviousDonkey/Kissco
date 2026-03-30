@@ -53,7 +53,7 @@ class AIRouter:
             # Routing logic based on tiered free plan
             if tokens < 6000:
                 # Tier 1 (Small): llama-3.1-8b-instant
-                model = "llama-3.1-8b-instant"
+                model = "meta-llama/llama-4-scout-17b-16e-instruct"#model = "llama-3.1-8b-instant"
             elif 6000 <= tokens < 12000:
                 # Tier 2 (Medium): llama-3.3-70b-versatile
                 model = "llama-3.3-70b-versatile"
