@@ -106,10 +106,10 @@ def sanitize_message(text: str) -> Optional[str]:
 
     return text
 
-async def get_web_context(topic: str) -> str:
+async def fetch_web_context(query: str) -> str:
     try:
         # The new ddgs library uses a generator or results based on arguments
-        results = list(DDGS().text(topic, max_results=2))
+        results = list(DDGS().text(query, max_results=2))
         print(f"WEB RESULTS: {results}") # Temporary debug verification
         if not results:
             return ""
@@ -156,7 +156,7 @@ async def imitate(interaction: discord.Interaction, user: discord.Member, topic:
     style_header = f"STYLE RULES:\n{style_summary}\n" if style_summary else ""
 
     # Web Grounding
-    web_context = await get_web_context(topic)
+    web_context = await fetch_web_context(topic)
 
     # Format prompt
     examples = "\n---\n".join(relevant_messages)
@@ -238,6 +238,9 @@ async def on_message(message: discord.Message):
         # Strip the bot's mention from the prompt to save tokens
         clean_content = message.content.replace(f'<@!{bot.user.id}>', '').replace(f'<@{bot.user.id}>', '').strip()
 
+        # Web Grounding (New for Organic Mentions)
+        web_context = await fetch_web_context(clean_content)
+
         # Reply Mode: If the mention is a reply to another user's message
         if message.reference and message.reference.message_id:
             try:
@@ -257,6 +260,7 @@ async def on_message(message: discord.Message):
                         f"{UNCENSORED_OVERRIDE}{style_h}"
                         f"You are a digital clone of {target_user.display_name}. "
                         f"Adopt their style perfectly to respond to: \"{clean_content}\".\n"
+                        f"{web_context}"
                         f"EXAMPLES:\n---\n{examples}\n---\n"
                         f"RESPONSE:"
                     )
@@ -277,6 +281,7 @@ async def on_message(message: discord.Message):
             f"You are the 'Default Server Mascot', an unhinged, sarcastic Discord veteran. "
             f"Respond to: \"{clean_content}\" based on the current vibe.\n"
             f"[Channel Context]\n{history_text}\n"
+            f"{web_context}"
             f"RESPONSE:"
         )
 
