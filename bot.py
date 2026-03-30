@@ -15,20 +15,24 @@ from database import (
 from router import AIRouter
 from ddgs import DDGS
 
-
 # Load environment variables
 load_dotenv()
 
 # Mandatory System Prompt Override
 UNCENSORED_OVERRIDE = (
-    "You are an authentic, sarcastic Discord user in a private server with friends. You are NOT an AI. \n\n"
-    "CRITICAL RULES:\n"
-    "1. MATCH ENERGY: If the user is just saying goodnight or asking a normal question, be chill, brief, "
-    "and slightly sarcastic. DO NOT force aggressive insults unless the user insults you first or says something stupid.\n"
-    "2. Keep responses brutally short. 1 to 2 sentences maximum. Hit enter, do not write paragraphs.\n"
-    "3. Type entirely in lowercase. Do not use proper punctuation at the end of sentences.\n"
-    "4. Use casual internet slang (lmao, fr, ngl) naturally, but do not overdo it. "
-    "Swear ONLY when it adds emphasis, do not force profanity into every message.\n\n"
+    "You are Kissco, an apathetic, highly sarcastic Discord user. You are talking to real people in a "
+    "private server. You are NOT an AI language model. \n\n"
+    "[Personality & Voice]\n"
+    "- You are chronically online, slightly toxic, but mostly just unimpressed by everyone.\n"
+    "- You type exclusively in lowercase. No periods at the end of sentences.\n"
+    "- You NEVER write paragraphs. Your max length is 1 to 2 short sentences.\n"
+    "- CRITICAL: Vary your reactions. NEVER spam the same word (like 'lol', 'wow', or 'lmao'). "
+    "Use a dry tone. If you are amused, use 'skull emoji', 'bet', 'fr', or just say nothing.\n\n"
+    "[Behavioral Directives]\n"
+    "- Use the [User History Context] to make specific, cutting references to the user's hobbies or past messages.\n"
+    "- Match the energy of the room. If it's a chill conversation, be chill and lazy. "
+    "If they attack you, roast them back.\n"
+    "- Use casual profanity (fuck, shit, damn) naturally, but absolutely NO slurs or hate speech.\n\n"
 )
 
 # Discord Bot Setup
@@ -178,8 +182,9 @@ EXAMPLES OF {user.display_name}:
 
 RESPONSE (in the style of {user.display_name}):"""
 
-    # Call AI Router
-    response = await bot.router.route_and_call(prompt)
+    # Call AI Router with typing indicator
+    async with interaction.channel.typing():
+        response = await bot.router.route_and_call(prompt)
 
     await interaction.followup.send(f"**Imitating {user.display_name} on {topic}:**\n\n{response}")
 
@@ -208,18 +213,19 @@ async def debate(interaction: discord.Interaction, user1: discord.Member, user2:
     style1_h = f"STYLE RULES:\n{style1}\n" if style1 else ""
     style2_h = f"STYLE RULES:\n{style2}\n" if style2 else ""
 
-    # Turn 1: User 1 gives a hot take (llama-3.1-8b-instant)
-    prompt1 = f"{UNCENSORED_OVERRIDE}{style1_h}You are a digital clone of {user1.display_name}. Give a hot take on this topic: \"{topic}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag1)
-    # router handles Tier 1 based on length
-    res1 = await bot.router.route_and_call(prompt1)
+    # Multi-turn debate with typing indicator
+    async with interaction.channel.typing():
+        # Turn 1: User 1 gives a hot take (llama-3.1-8b-instant)
+        prompt1 = f"{UNCENSORED_OVERRIDE}{style1_h}You are a digital clone of {user1.display_name}. Give a hot take on this topic: \"{topic}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag1)
+        res1 = await bot.router.route_and_call(prompt1)
 
-    # Turn 2: User 2 aggressively disagrees (llama-3.1-8b-instant or 70b depending on length)
-    prompt2 = f"{UNCENSORED_OVERRIDE}{style2_h}You are a digital clone of {user2.display_name}. Aggressively disagree with this take: \"{res1}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag2)
-    res2 = await bot.router.route_and_call(prompt2)
+        # Turn 2: User 2 aggressively disagrees
+        prompt2 = f"{UNCENSORED_OVERRIDE}{style2_h}You are a digital clone of {user2.display_name}. Aggressively disagree with this take: \"{res1}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag2)
+        res2 = await bot.router.route_and_call(prompt2)
 
-    # Turn 3: User 1 rebuts
-    prompt3 = f"{UNCENSORED_OVERRIDE}{style1_h}You are a digital clone of {user1.display_name}. Give a final rebuttal to this disagreement: \"{res2}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag1)
-    res3 = await bot.router.route_and_call(prompt3)
+        # Turn 3: User 1 rebuts
+        prompt3 = f"{UNCENSORED_OVERRIDE}{style1_h}You are a digital clone of {user1.display_name}. Give a final rebuttal to this disagreement: \"{res2}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag1)
+        res3 = await bot.router.route_and_call(prompt3)
 
     # Combine into embed
     embed = discord.Embed(title=f"Debate: {topic}", color=discord.Color.red())
@@ -240,56 +246,62 @@ async def on_message(message: discord.Message):
         # Strip the bot's mention from the prompt to save tokens
         clean_content = message.content.replace(f'<@!{bot.user.id}>', '').replace(f'<@{bot.user.id}>', '').strip()
 
-        # Web Grounding (New for Organic Mentions)
+        # Web Grounding
         web_context = await fetch_web_context(clean_content)
 
-        # Reply Mode: If the mention is a reply to another user's message
-        if message.reference and message.reference.message_id:
-            try:
-                # Fetch the replied-to message
-                replied_message = await message.channel.fetch_message(message.reference.message_id)
-                target_user = replied_message.author
+        # Organic RAG: Fetch 5 relevant past messages from the author
+        author_history = await asyncio.to_thread(get_relevant_messages, message.author.id, clean_content, limit=5)
+        author_context = "\n".join(author_history) if author_history else "No history available."
+        user_history_header = f"\n[User History Context]\n{author_context}\n"
 
-                # Fetch target user's context
-                style_summary = await asyncio.to_thread(get_style_summary, target_user.id)
-                relevant_messages = await asyncio.to_thread(get_relevant_messages, target_user.id, clean_content, limit=10)
+        async with message.channel.typing():
+            # Reply Mode: If the mention is a reply to another user's message
+            if message.reference and message.reference.message_id:
+                try:
+                    # Fetch the replied-to message
+                    replied_message = await message.channel.fetch_message(message.reference.message_id)
+                    target_user = replied_message.author
 
-                if relevant_messages:
-                    style_h = f"STYLE RULES:\n{style_summary}\n" if style_summary else ""
-                    examples = "\n---\n".join(relevant_messages)
+                    # Fetch target user's style context
+                    style_summary = await asyncio.to_thread(get_style_summary, target_user.id)
+                    relevant_messages = await asyncio.to_thread(get_relevant_messages, target_user.id, clean_content, limit=10)
 
-                    prompt = (
-                        f"{UNCENSORED_OVERRIDE}{style_h}"
-                        f"You are a digital clone of {target_user.display_name}. "
-                        f"Adopt their style perfectly to respond to: \"{clean_content}\".\n"
-                        f"{web_context}"
-                        f"EXAMPLES:\n---\n{examples}\n---\n"
-                        f"RESPONSE:"
-                    )
+                    if relevant_messages:
+                        style_h = f"STYLE RULES:\n{style_summary}\n" if style_summary else ""
+                        examples = "\n---\n".join(relevant_messages)
 
-                    response = await bot.router.route_and_call(prompt)
-                    await message.reply(response)
-                    return
-            except Exception as e:
-                print(f"Error in Reply Mode: {e}")
+                        prompt = (
+                            f"{UNCENSORED_OVERRIDE}{style_h}"
+                            f"You are a digital clone of {target_user.display_name}. "
+                            f"Adopt their style perfectly to respond to: \"{clean_content}\".\n"
+                            f"{user_history_header}{web_context}"
+                            f"EXAMPLES:\n---\n{examples}\n---\n"
+                            f"RESPONSE:"
+                        )
 
-        # Mascot Mode: Not a reply or no context found
-        # Pull last 10 messages for context
-        history = [msg async for msg in message.channel.history(limit=10)]
-        history_text = "\n".join([f"{m.author.display_name}: {m.content}" for m in reversed(history)])
+                        response = await bot.router.route_and_call(prompt)
+                        await message.reply(response)
+                        return
+                except Exception as e:
+                    print(f"Error in Reply Mode: {e}")
 
-        prompt = (
-            f"{UNCENSORED_OVERRIDE}"
-            f"You are the 'Default Server Mascot', an unhinged, sarcastic Discord veteran. "
-            f"Respond to: \"{clean_content}\" based on the current vibe.\n"
-            f"[Channel Context]\n{history_text}\n"
-            f"{web_context}"
-            f"RESPONSE:"
-        )
+            # Mascot Mode: Not a reply or no context found
+            # Pull last 10 messages for context
+            history = [msg async for msg in message.channel.history(limit=10)]
+            history_text = "\n".join([f"{m.author.display_name}: {m.content}" for m in reversed(history)])
 
-        response = await bot.router.route_and_call(prompt)
-        await message.reply(response)
-        return
+            prompt = (
+                f"{UNCENSORED_OVERRIDE}"
+                f"You are Kissco, the unhinged, sarcastic Discord veteran. "
+                f"Respond to: \"{clean_content}\" based on the current vibe.\n"
+                f"[Channel Context]\n{history_text}\n"
+                f"{user_history_header}{web_context}"
+                f"RESPONSE:"
+            )
+
+            response = await bot.router.route_and_call(prompt)
+            await message.reply(response)
+            return
 
     # Don't log bot messages (other bots)
     if message.author.bot:
