@@ -15,6 +15,7 @@ from database import (
 from router import AIRouter
 from ddgs import DDGS
 
+
 # Load environment variables
 load_dotenv()
 
