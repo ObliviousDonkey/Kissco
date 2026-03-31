@@ -114,6 +114,21 @@ def sanitize_message(text: str) -> Optional[str]:
 
     return text
 
+async def contextualize_query(user_input: str, history_text: str, router: AIRouter) -> str:
+    """Uses LLM to rewrite a user's message into a standalone search query based on context."""
+    prompt = (
+        f"Based on the following Discord conversation history, rewrite the user's latest message "
+        f"into a standalone search query that includes all necessary names and context. "
+        f"If the message is already standalone, return it as is. Respond ONLY with the query.\n\n"
+        f"[Conversation History]\n{history_text}\n\n"
+        f"User Message: \"{user_input}\"\n"
+        f"Standalone Query:"
+    )
+    # Use Tier 1 for fast contextualization
+    contextualized = await router.route_and_call(prompt)
+    # Clean up any potential AI chatter
+    return contextualized.strip(' "')
+
 async def fetch_web_context(query: str) -> str:
     try:
         # The new ddgs library uses a generator or results based on arguments
@@ -253,8 +268,16 @@ async def on_message(message: discord.Message):
         # Strip the bot's mention from the prompt to save tokens
         clean_content = message.content.replace(f'<@!{bot.user.id}>', '').replace(f'<@{bot.user.id}>', '').strip()
 
+        # Pull last 10 messages for context
+        history = [msg async for msg in message.channel.history(limit=10)]
+        history_text = "\n".join([f"{m.author.display_name}: {m.content}" for m in reversed(history)])
+
+        # Contextualize Query for Web Search
+        search_query = await contextualize_query(clean_content, history_text, bot.router)
+        print(f"Contextualized Search Query: {search_query}")
+
         # Web Grounding
-        web_context = await fetch_web_context(clean_content)
+        web_context = await fetch_web_context(search_query)
 
         # Organic RAG: Fetch 5 relevant past messages from the author
         author_history = await asyncio.to_thread(get_relevant_messages, message.author.id, clean_content, limit=5)
@@ -293,9 +316,7 @@ async def on_message(message: discord.Message):
                     print(f"Error in Reply Mode: {e}")
 
             # Mascot Mode: Not a reply or no context found
-            # Pull last 10 messages for context
-            history = [msg async for msg in message.channel.history(limit=10)]
-            history_text = "\n".join([f"{m.author.display_name}: {m.content}" for m in reversed(history)])
+            # History text already fetched for contextualization
 
             prompt = (
                 f"{UNCENSORED_OVERRIDE}"
