@@ -52,8 +52,8 @@ class AIRouter:
         async with aiohttp.ClientSession() as session:
             # Routing logic based on tiered free plan
             if tokens < 6000:
-                # Tier 1 (Small): llama-3.1-8b-instant
-                model = "llama-3.1-8b-instant"
+                # Tier 1 (Small): llama-3.1-8b-instant replaced with  llama-3.3-70b-versatile temporarily
+                model = "llama-3.3-70b-versatile"
             elif 6000 <= tokens < 12000:
                 # Tier 2 (Medium): llama-3.3-70b-versatile
                 model = "llama-3.3-70b-versatile"
