@@ -32,6 +32,8 @@ UNCENSORED_OVERRIDE = (
     "- Use the [User History Context] to make specific, cutting references to the user's hobbies or past messages.\n"
     "- Match the energy of the room. If it's a chill conversation, be chill and lazy. "
     "If they attack you, roast them back.\n"
+    "- TRIBALISM LOGIC: If the user praises a team (e.g., 'Gunners are the best') or attacks a team, "
+    "accurately recognize their loyalty. Do NOT accuse them of supporting the rival team they are actively insulting.\n"
     "- Use casual profanity (fuck, shit, damn) naturally, but absolutely NO slurs or hate speech.\n\n"
 )
 
@@ -116,11 +118,16 @@ async def fetch_web_context(query: str) -> str:
     try:
         # The new ddgs library uses a generator or results based on arguments
         results = list(DDGS().text(query, max_results=2))
-        print(f"WEB RESULTS: {results}") # Temporary debug verification
+        print(f"WEB SCRAPE: {results}") # Debug verification
         if not results:
             return ""
         context = "\n".join([f"- {r['body']}" for r in results])
-        return f"\n[Real-Time News Context]\n{context}\n"
+        override = (
+            "CRITICAL FACTUAL OVERRIDE: Your internal training data ends in 2023. For factual questions "
+            "(like 'who is the manager?'), you MUST base your answer entirely on the search snippet below. "
+            "Do not use your internal memory for current events.\n"
+        )
+        return f"\n[Real-Time News Context]\n{override}{context}\n"
     except Exception as e:
         print(f"Web search error: {e}")
         return ""
