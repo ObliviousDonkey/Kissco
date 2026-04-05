@@ -79,3 +79,4 @@ class AIRouter:
 if __name__ == "__main__":
     router = AIRouter()
     print(f"Token count for 'Hello world': {router.count_tokens('Hello world')}")
+#
