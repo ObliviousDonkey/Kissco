@@ -7,10 +7,15 @@ from typing import Optional
 class AIRouter:
     def __init__(self):
         self.groq_api_key = os.getenv("GROQ_API_KEY")
+        self.session = None
         try:
             self.encoding = tiktoken.get_encoding("cl100k_base")
         except Exception:
             self.encoding = tiktoken.get_encoding("o200k_base")
+
+    async def close(self):
+        if self.session and not self.session.closed:
+            await self.session.close()
 
     def count_tokens(self, text: str) -> int:
         return len(self.encoding.encode(text))
@@ -46,35 +51,37 @@ class AIRouter:
             return None
 
     async def route_and_call(self, prompt: str) -> str:
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession()
+
         tokens = self.count_tokens(prompt)
         print(f"Prompt tokens: {tokens}")
 
-        async with aiohttp.ClientSession() as session:
-            # Routing logic based on tiered free plan
-            if tokens < 6000:
-                # Tier 1 (Small): llama-3.1-8b-instant
-                model = "llama-3.1-8b-instant"
-            elif 6000 <= tokens < 12000:
-                # Tier 2 (Medium): llama-3.3-70b-versatile
-                model = "llama-3.3-70b-versatile"
-            else:
-                # Tier 3 (Large/Context): meta-llama/llama-4-scout-17b-16e-instruct
-                model = "meta-llama/llama-4-scout-17b-16e-instruct"
+        # Routing logic based on tiered free plan
+        if tokens < 6000:
+            # Tier 1 (Small): llama-3.1-8b-instant
+            model = "llama-3.1-8b-instant"
+        elif 6000 <= tokens < 12000:
+            # Tier 2 (Medium): llama-3.3-70b-versatile
+            model = "llama-3.3-70b-versatile"
+        else:
+            # Tier 3 (Large/Context): meta-llama/llama-4-scout-17b-16e-instruct
+            model = "meta-llama/llama-4-scout-17b-16e-instruct"
 
-            print(f"Routing to Groq primary model: {model}")
-            response = await self._call_groq(session, model, prompt)
+        print(f"Routing to Groq primary model: {model}")
+        response = await self._call_groq(self.session, model, prompt)
 
-            # Failover logic: if primary model returns 429, wait 1s and retry with backup
+        # Failover logic: if primary model returns 429, wait 1s and retry with backup
+        if response == "RATE_LIMIT":
+            print("Primary model rate limited. Waiting 1 second for failover...")
+            await asyncio.sleep(1)
+            backup_model = "openai/gpt-oss-120b"
+            print(f"Attempting failover to Groq secondary backup: {backup_model}")
+            response = await self._call_groq(self.session, backup_model, prompt)
             if response == "RATE_LIMIT":
-                print("Primary model rate limited. Waiting 1 second for failover...")
-                await asyncio.sleep(1)
-                backup_model = "openai/gpt-oss-120b"
-                print(f"Attempting failover to Groq secondary backup: {backup_model}")
-                response = await self._call_groq(session, backup_model, prompt)
-                if response == "RATE_LIMIT":
-                    response = None
+                response = None
 
-            return response or "I'm sorry, I'm having trouble connecting to my brain right now."
+        return response or "I'm sorry, I'm having trouble connecting to my brain right now."
 
 if __name__ == "__main__":
     router = AIRouter()

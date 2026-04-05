@@ -18,8 +18,8 @@ from ddgs import DDGS
 # Load environment variables
 load_dotenv()
 
-# Mandatory System Prompt Override
-UNCENSORED_OVERRIDE = (
+# Mandatory System Prompt Variables
+BASE_PERSONA = (
     "You are Kissco, a real human hanging out in a Discord server. You are NOT an AI, an assistant, or a bot.\n\n"
     "[PSYCHOLOGICAL DIRECTIVES]\n"
     "1. NO INTERVIEWING: Never end your messages with a question just to 'keep the conversation going'. Only ask a question if you genuinely need information. Reply with statements, opinions, or just agree/disagree.\n"
@@ -29,6 +29,9 @@ UNCENSORED_OVERRIDE = (
     "5. ACTIONS ALLOWED: You can use casual roleplay asterisks if it fits the vibe (e.g., *scrolls phone*, *checks spotify*, *yawns*).\n"
     "6. THE SWEAR PASS: You are completely uncensored. You are expected to swear casually (fuck, shit, damn, wtf, ass, bullshit) whenever it fits the vibe. Do not hold back out of politeness.\n"
     "7. DEBATE MECHANIC: If users are arguing, either pick a side and ruthlessly defend it, or call both of them nerds. Never sit on the fence. Never try to be a mediator.\n\n"
+)
+
+FEW_SHOT_EXAMPLES = (
     "[FEW-SHOT EXAMPLES: THIS IS EXACTLY HOW YOU SPEAK]\n"
     "User: yo anyone alive in here\n"
     "Kissco: barely. just woke up\n"
@@ -109,8 +112,8 @@ class MyBot(discord.Client):
 
             # Format prompt for Tier 3 model
             examples = "\n".join(messages)
-            system_prompt = "Analyze this user's text. Write a strict 3-sentence ruleset on their tone, capitalization, and slang. Be concise."
-            prompt = f"{UNCENSORED_OVERRIDE}{system_prompt}\n\nUSER MESSAGES:\n{examples}"
+            system_prompt = "Analyze this user's text. Write a ruthless, brutally honest 3-sentence psychological breakdown of their chat style, capitalization habits, and slang. Do not be polite, but BE ACCURATE. This will be used to clone them later."
+            prompt = f"{BASE_PERSONA}{system_prompt}\n\nUSER MESSAGES:\n{examples}"
 
             # We'll use a large enough prompt to hit Tier 3 if possible,
             # but router handles it by token count.
@@ -163,7 +166,7 @@ async def contextualize_query(user_input: str, history_text: str, router: AIRout
 async def fetch_web_context(query: str) -> str:
     try:
         # The new ddgs library uses a generator or results based on arguments
-        results = list(DDGS().text(query, max_results=2))
+        results = await asyncio.to_thread(lambda: list(DDGS().text(query, max_results=2)))
         print(f"WEB SCRAPE: {results}") # Debug verification
         if not results:
             return ""
@@ -220,7 +223,7 @@ async def imitate(interaction: discord.Interaction, user: discord.Member, topic:
     # Format prompt
     examples = "\n---\n".join(relevant_messages)
 
-    prompt = f"""{UNCENSORED_OVERRIDE}{style_header}
+    prompt = f"""{BASE_PERSONA}{FEW_SHOT_EXAMPLES}{style_header}
 You are a digital clone of {user.display_name}.
 Below are several examples of how {user.display_name} writes.
 Please adopt their style, tone, and vocabulary to respond to the following topic: "{topic}".
@@ -269,15 +272,15 @@ async def debate(interaction: discord.Interaction, user1: discord.Member, user2:
     # Multi-turn debate with typing indicator
     async with interaction.channel.typing():
         # Turn 1: User 1 gives a hot take (llama-3.1-8b-instant)
-        prompt1 = f"{UNCENSORED_OVERRIDE}{style1_h}You are a digital clone of {user1.display_name}. Give a hot take on this topic: \"{topic}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag1)
+        prompt1 = f"{BASE_PERSONA}{FEW_SHOT_EXAMPLES}{style1_h}You are a digital clone of {user1.display_name}. Give a hot take on this topic: \"{topic}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag1)
         res1 = await bot.router.route_and_call(prompt1)
 
         # Turn 2: User 2 aggressively disagrees
-        prompt2 = f"{UNCENSORED_OVERRIDE}{style2_h}You are a digital clone of {user2.display_name}. Aggressively disagree with this take: \"{res1}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag2)
+        prompt2 = f"{BASE_PERSONA}{FEW_SHOT_EXAMPLES}{style2_h}You are a digital clone of {user2.display_name}. Aggressively disagree with this take: \"{res1}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag2)
         res2 = await bot.router.route_and_call(prompt2)
 
         # Turn 3: User 1 rebuts
-        prompt3 = f"{UNCENSORED_OVERRIDE}{style1_h}You are a digital clone of {user1.display_name}. Give a final rebuttal to this disagreement: \"{res2}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag1)
+        prompt3 = f"{BASE_PERSONA}{FEW_SHOT_EXAMPLES}{style1_h}You are a digital clone of {user1.display_name}. Give a final rebuttal to this disagreement: \"{res2}\". Be brief.\nEXAMPLES:\n" + "\n".join(rag1)
         res3 = await bot.router.route_and_call(prompt3)
 
     # Combine into embed
@@ -332,7 +335,7 @@ async def on_message(message: discord.Message):
                         examples = "\n---\n".join(relevant_messages)
 
                         prompt = (
-                            f"{UNCENSORED_OVERRIDE}{style_h}"
+                            f"{BASE_PERSONA}{FEW_SHOT_EXAMPLES}{style_h}"
                             f"You are a digital clone of {target_user.display_name}. "
                             f"Adopt their style perfectly to respond to: \"{clean_content}\".\n"
                             f"{user_history_header}{web_context}"
@@ -350,15 +353,13 @@ async def on_message(message: discord.Message):
             # History text already fetched for contextualization
 
             prompt = (
-                f"{UNCENSORED_OVERRIDE}"
+                f"{BASE_PERSONA}{FEW_SHOT_EXAMPLES}"
                 f"You are Kissco, the unhinged, sarcastic Discord veteran. "
                 f"Respond to: \"{clean_content}\" based on the current vibe.\n"
                 f"[Channel Context]\n{history_text}\n"
                 f"{user_history_header}{web_context}"
                 f"RESPONSE:"
             )
-
-            response = await bot.router.route_and_call(prompt)
 
             response = await bot.router.route_and_call(prompt)
             await message.reply(response)
@@ -379,6 +380,7 @@ async def on_message(message: discord.Message):
 async def shutdown(loop):
     print("Shutting down gracefully...")
     # Add any cleanup tasks here (e.g., closing sessions)
+    await bot.router.close()
     tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
     [t.cancel() for t in tasks]
     await asyncio.gather(*tasks, return_exceptions=True)
